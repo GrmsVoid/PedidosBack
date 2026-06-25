@@ -1,0 +1,329 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MesaEstado {
+  LIBRE
+  OCUPADA
+  UNIDA
+}
+
+enum SesionEstado {
+  ABIERTA
+  CERRADA
+  FUGADA
+}
+
+enum PedidoEstado {
+  CONFIRMADO
+  EN_PREPARACION
+  LISTO
+  ENTREGADO
+  CANCELADO
+}
+
+enum PedidoOrigen {
+  CLIENTE
+  MOZO
+}
+
+enum MetodoPago {
+  EFECTIVO
+  YAPE
+  POS
+}
+
+enum RolCodigo {
+  MOZO
+  BARISTA
+  CAJERO
+  ADMIN
+}
+
+enum EventoTipo {
+  LLAMAR_MOZO
+  PEDIR_CUENTA
+  MESA_UNIDA
+  MESA_SEPARADA
+  PEDIDO_CANCELADO
+  CIERRE_SIN_PAGO
+  PRECIO_CAMBIADO
+  ENCUESTA_POST_CIERRE
+}
+
+model Local {
+  id             String       @id @default(cuid())
+  nombre         String
+  ruc            String?
+  direccion      String?
+  timezone       String       @default("America/Lima")
+  qrSigningKeyId String       @default("v1")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  mesas          Mesa[]
+  categorias     Categoria[]
+  estaciones     Estacion[]
+  sesiones       SesionMesa[]
+}
+
+model Estacion {
+  id        String     @id @default(cuid())
+  localId   String
+  nombre    String
+  activa    Boolean    @default(true)
+  local     Local      @relation(fields: [localId], references: [id])
+  productos Producto[]
+
+  @@index([localId, activa])
+}
+
+model Mesa {
+  id        String            @id @default(cuid())
+  localId   String
+  codigo    String
+  capacidad Int               @default(4)
+  posicionX Int               @default(0)
+  posicionY Int               @default(0)
+  estado    MesaEstado        @default(LIBRE)
+  qrToken   String            @unique
+  deletedAt DateTime?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  local     Local             @relation(fields: [localId], references: [id])
+  sesiones  SesionMesaMesas[]
+
+  @@unique([localId, codigo])
+  @@index([localId, estado])
+}
+
+model Categoria {
+  id        String     @id @default(cuid())
+  localId   String
+  nombre    String
+  orden     Int        @default(0)
+  activa    Boolean    @default(true)
+  deletedAt DateTime?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  local     Local      @relation(fields: [localId], references: [id])
+  productos Producto[]
+
+  @@index([localId, activa])
+}
+
+model Producto {
+  id              String               @id @default(cuid())
+  categoriaId     String
+  estacionId      String
+  nombre          String
+  descripcion     String?
+  imagenUrl       String?
+  precioBase      Decimal              @db.Decimal(10, 2)
+  prepTimeMinutes Int                  @default(5)
+  disponible      Boolean              @default(true)
+  orden           Int                  @default(0)
+  deletedAt       DateTime?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  categoria       Categoria            @relation(fields: [categoriaId], references: [id])
+  estacion        Estacion             @relation(fields: [estacionId], references: [id])
+  grupos          GrupoModificador[]
+  items           ItemPedido[]
+  historialPrecio ProductoPrecioHist[]
+
+  @@index([categoriaId, disponible])
+  @@index([estacionId])
+}
+
+model GrupoModificador {
+  id           String              @id @default(cuid())
+  productoId   String
+  nombre       String
+  obligatorio  Boolean             @default(false)
+  minSeleccion Int                 @default(0)
+  maxSeleccion Int                 @default(1)
+  orden        Int                 @default(0)
+  producto     Producto            @relation(fields: [productoId], references: [id])
+  opciones     OpcionModificador[]
+}
+
+model OpcionModificador {
+  id          String            @id @default(cuid())
+  grupoId     String
+  nombre      String
+  deltaPrecio Decimal           @default(0) @db.Decimal(10, 2)
+  disponible  Boolean           @default(true)
+  orden       Int               @default(0)
+  grupo       GrupoModificador  @relation(fields: [grupoId], references: [id])
+  items       ItemModificador[]
+}
+
+model ProductoPrecioHist {
+  id             String   @id @default(cuid())
+  productoId     String
+  precioAnterior Decimal  @db.Decimal(10, 2)
+  precioNuevo    Decimal  @db.Decimal(10, 2)
+  cambiadoPor    String
+  cambiadoEn     DateTime @default(now())
+  producto       Producto @relation(fields: [productoId], references: [id])
+
+  @@index([productoId, cambiadoEn])
+}
+
+model Usuario {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  nombre       String
+  pinHash      String?
+  passwordHash String?
+  activo       Boolean      @default(true)
+  deletedAt    DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  roles        UsuarioRol[]
+}
+
+model Rol {
+  id       String       @id @default(cuid())
+  codigo   RolCodigo    @unique
+  usuarios UsuarioRol[]
+}
+
+model UsuarioRol {
+  usuarioId String
+  rolId     String
+  usuario   Usuario @relation(fields: [usuarioId], references: [id])
+  rol       Rol     @relation(fields: [rolId], references: [id])
+
+  @@id([usuarioId, rolId])
+}
+
+model SesionMesa {
+  id                 String            @id @default(cuid())
+  localId            String
+  abiertaEn          DateTime          @default(now())
+  cerradaEn          DateTime?
+  cerradaPor         String?
+  estado             SesionEstado      @default(ABIERTA)
+  encuestaSolicitada Boolean           @default(false)
+  local              Local             @relation(fields: [localId], references: [id])
+  mesas              SesionMesaMesas[]
+  pedidos            Pedido[]
+  pagos              Pago[]
+  eventos            EventoSesion[]
+  encuesta           Encuesta?
+
+  @@index([localId, estado, abiertaEn])
+}
+
+model SesionMesaMesas {
+  sesionId String
+  mesaId   String
+  sesion   SesionMesa @relation(fields: [sesionId], references: [id])
+  mesa     Mesa       @relation(fields: [mesaId], references: [id])
+
+  @@id([sesionId, mesaId])
+  @@index([mesaId])
+}
+
+model Pedido {
+  id                    String       @id @default(cuid())
+  sesionId              String
+  numeroSesion          Int
+  origen                PedidoOrigen
+  creadoPor             String?
+  confirmadoEn          DateTime     @default(now())
+  preparacionIniciadaEn DateTime?
+  listoEn               DateTime?
+  entregadoEn           DateTime?
+  canceladoEn           DateTime?
+  canceladoMotivo       String?
+  estado                PedidoEstado @default(CONFIRMADO)
+  sesion                SesionMesa   @relation(fields: [sesionId], references: [id])
+  items                 ItemPedido[]
+
+  @@unique([sesionId, numeroSesion])
+  @@index([estado, confirmadoEn])
+}
+
+model ItemPedido {
+  id                      String            @id @default(cuid())
+  pedidoId                String
+  productoId              String
+  cantidad                Int
+  precioUnitarioCongelado Decimal           @db.Decimal(10, 2)
+  notaLibre               String?
+  estacionIdCongelada     String
+  pedido                  Pedido            @relation(fields: [pedidoId], references: [id])
+  producto                Producto          @relation(fields: [productoId], references: [id])
+  modificadores           ItemModificador[]
+
+  @@index([pedidoId])
+  @@index([estacionIdCongelada])
+}
+
+model ItemModificador {
+  id                   String            @id @default(cuid())
+  itemPedidoId         String
+  opcionId             String
+  nombreCongelado      String
+  deltaPrecioCongelado Decimal           @db.Decimal(10, 2)
+  itemPedido           ItemPedido        @relation(fields: [itemPedidoId], references: [id])
+  opcion               OpcionModificador @relation(fields: [opcionId], references: [id])
+
+  @@index([itemPedidoId])
+}
+
+model Pago {
+  id           String     @id @default(cuid())
+  sesionId     String
+  metodo       MetodoPago
+  monto        Decimal    @db.Decimal(10, 2)
+  cajeroId     String
+  comensalNum  Int?
+  registradoEn DateTime   @default(now())
+  sesion       SesionMesa @relation(fields: [sesionId], references: [id])
+
+  @@index([sesionId])
+}
+
+model EventoSesion {
+  id             String     @id @default(cuid())
+  sesionId       String
+  tipo           EventoTipo
+  payloadJson    Json?
+  atendido       Boolean    @default(false)
+  atendidoPor    String?
+  atendidoEn     DateTime?
+  actorUsuarioId String?
+  actorIp        String?
+  creadoEn       DateTime   @default(now())
+  sesion         SesionMesa @relation(fields: [sesionId], references: [id])
+
+  @@index([sesionId, tipo, atendido])
+}
+
+model Encuesta {
+  id         String     @id @default(cuid())
+  sesionId   String     @unique
+  estrellas  Int
+  comentario String?
+  creadaEn   DateTime   @default(now())
+  sesion     SesionMesa @relation(fields: [sesionId], references: [id])
+}
+
+model IdempotencyKey {
+  key            String   @id
+  endpoint       String
+  responseStatus Int
+  responseBody   Json
+  creadaEn       DateTime @default(now())
+  expiraEn       DateTime
+
+  @@index([expiraEn])
+}

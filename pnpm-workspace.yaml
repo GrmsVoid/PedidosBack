@@ -1,0 +1,11 @@
+# Repo de un solo paquete. Habilita los build scripts que pnpm v11 bloquea por defecto:
+# se aprueban los que la app necesita (Prisma, esbuild→tsx) y se deniegan los nativos
+# transitivos de testcontainers (no requeridos en runtime).
+allowBuilds:
+  "@prisma/client": true
+  "@prisma/engines": true
+  prisma: true
+  esbuild: true
+  cpu-features: false
+  protobufjs: false
+  ssh2: false

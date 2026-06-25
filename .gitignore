@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# builds
+dist/
+build/
+
+# testing
+coverage/
+
+# typescript
+*.tsbuildinfo
+
+# env (no commitear secretos; usar .env.example como plantilla)
+.env
+.env.local
+.env.*.local
+.env.production
+
+# misc
+.DS_Store
+*.pem
+npm-debug.log*
