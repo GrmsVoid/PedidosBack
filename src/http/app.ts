@@ -7,6 +7,7 @@ import { mozoRouter } from "./mozo.routes";
 import { kdsRouter } from "./kds.routes";
 import { cajaRouter } from "./caja.routes";
 import { adminRouter } from "./admin.routes";
+import { finanzasRouter } from "./finanzas.routes";
 
 export function createApp(): Express {
   const app = express();
@@ -31,6 +32,7 @@ export function createApp(): Express {
   app.use("/api", kdsRouter);
   app.use("/api", cajaRouter);
   app.use("/api", adminRouter);
+  app.use("/api", finanzasRouter);
 
   return app;
 }

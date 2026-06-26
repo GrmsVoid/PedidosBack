@@ -56,6 +56,11 @@ enum EventoTipo {
   ENCUESTA_POST_CIERRE
 }
 
+enum EgresoOrigen {
+  MANUAL
+  PLANILLA
+}
+
 model Local {
   id             String       @id @default(cuid())
   nombre         String
@@ -69,6 +74,11 @@ model Local {
   categorias     Categoria[]
   estaciones     Estacion[]
   sesiones       SesionMesa[]
+  categoriasGasto   CategoriaGasto[]
+  egresos           Egreso[]
+  categoriasIngreso CategoriaIngreso[]
+  ingresosExtra     IngresoExtra[]
+  presupuestos      Presupuesto[]
 }
 
 model Estacion {
@@ -326,4 +336,87 @@ model IdempotencyKey {
   expiraEn       DateTime
 
   @@index([expiraEn])
+}
+
+// ---------- Finanzas (Fase A) ----------
+
+model CategoriaGasto {
+  id        String    @id @default(cuid())
+  localId   String
+  nombre    String
+  activa    Boolean   @default(true)
+  orden     Int       @default(0)
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  local        Local         @relation(fields: [localId], references: [id])
+  egresos      Egreso[]
+  presupuestos Presupuesto[]
+
+  @@index([localId, activa])
+}
+
+model Egreso {
+  id          String         @id @default(cuid())
+  localId     String
+  categoriaId String
+  monto       Decimal        @db.Decimal(10, 2)
+  fecha       DateTime
+  descripcion String?
+  origen      EgresoOrigen   @default(MANUAL)
+  creadoPor   String?
+  createdAt   DateTime       @default(now())
+  local       Local          @relation(fields: [localId], references: [id])
+  categoria   CategoriaGasto @relation(fields: [categoriaId], references: [id])
+
+  @@index([localId, fecha])
+  @@index([categoriaId])
+}
+
+model CategoriaIngreso {
+  id        String         @id @default(cuid())
+  localId   String
+  nombre    String
+  activa    Boolean        @default(true)
+  orden     Int            @default(0)
+  deletedAt DateTime?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  local     Local          @relation(fields: [localId], references: [id])
+  ingresos  IngresoExtra[]
+
+  @@index([localId, activa])
+}
+
+model IngresoExtra {
+  id          String           @id @default(cuid())
+  localId     String
+  categoriaId String
+  monto       Decimal          @db.Decimal(10, 2)
+  fecha       DateTime
+  descripcion String?
+  creadoPor   String?
+  createdAt   DateTime         @default(now())
+  local       Local            @relation(fields: [localId], references: [id])
+  categoria   CategoriaIngreso @relation(fields: [categoriaId], references: [id])
+
+  @@index([localId, fecha])
+  @@index([categoriaId])
+}
+
+// Presupuesto mensual por categoría de gasto (Fase B).
+model Presupuesto {
+  id          String         @id @default(cuid())
+  localId     String
+  categoriaId String
+  anio        Int
+  mes         Int
+  montoLimite Decimal        @db.Decimal(10, 2)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  local       Local          @relation(fields: [localId], references: [id])
+  categoria   CategoriaGasto @relation(fields: [categoriaId], references: [id])
+
+  @@unique([localId, categoriaId, anio, mes])
+  @@index([localId, anio, mes])
 }

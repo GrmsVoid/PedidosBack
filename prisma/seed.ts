@@ -197,6 +197,36 @@ async function main() {
     },
   });
 
+  // Categorías de finanzas (Fase A): gastos e ingresos extra
+  const catsGasto: Array<[string, string, number]> = [
+    ["cg-insumos", "Insumos", 1],
+    ["cg-servicios", "Servicios (luz, gas, agua)", 2],
+    ["cg-planilla", "Planilla", 3],
+    ["cg-alquiler", "Alquiler", 4],
+    ["cg-mantenimiento", "Mantenimiento", 5],
+    ["cg-otros", "Otros", 6],
+  ];
+  for (const [id, nombre, orden] of catsGasto) {
+    await prisma.categoriaGasto.upsert({
+      where: { id },
+      update: {},
+      create: { id, localId: local.id, nombre, orden },
+    });
+  }
+  const catsIngreso: Array<[string, string, number]> = [
+    ["ci-delivery", "Delivery", 1],
+    ["ci-eventos", "Eventos / catering", 2],
+    ["ci-propinas", "Propinas", 3],
+    ["ci-otros", "Otros", 4],
+  ];
+  for (const [id, nombre, orden] of catsIngreso) {
+    await prisma.categoriaIngreso.upsert({
+      where: { id },
+      update: {},
+      create: { id, localId: local.id, nombre, orden },
+    });
+  }
+
   const m1 = await prisma.mesa.findUniqueOrThrow({ where: { id: "demo-mesa-1" } });
   console.warn("Seed completo. Local demo, 10 mesas, 2 productos.");
   console.warn(`Demo cliente (mesa 1): http://localhost:3000/m/demo-mesa-1?t=${m1.qrToken}`);
