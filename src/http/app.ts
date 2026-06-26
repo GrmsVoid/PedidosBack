@@ -8,6 +8,7 @@ import { kdsRouter } from "./kds.routes";
 import { cajaRouter } from "./caja.routes";
 import { adminRouter } from "./admin.routes";
 import { finanzasRouter } from "./finanzas.routes";
+import { personalRouter } from "./personal.routes";
 
 export function createApp(): Express {
   const app = express();
@@ -33,6 +34,7 @@ export function createApp(): Express {
   app.use("/api", cajaRouter);
   app.use("/api", adminRouter);
   app.use("/api", finanzasRouter);
+  app.use("/api", personalRouter);
 
   return app;
 }

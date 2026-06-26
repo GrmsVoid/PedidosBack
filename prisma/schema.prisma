@@ -61,6 +61,12 @@ enum EgresoOrigen {
   PLANILLA
 }
 
+enum TipoRemuneracion {
+  FIJO_MENSUAL
+  POR_HORA
+  POR_TURNO
+}
+
 model Local {
   id             String       @id @default(cuid())
   nombre         String
@@ -189,13 +195,19 @@ model Usuario {
   id           String       @id @default(cuid())
   email        String       @unique
   nombre       String
-  pinHash      String?
-  passwordHash String?
-  activo       Boolean      @default(true)
-  deletedAt    DateTime?
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-  roles        UsuarioRol[]
+  pinHash          String?
+  passwordHash     String?
+  activo           Boolean          @default(true)
+  telefono         String?
+  tipoRemuneracion TipoRemuneracion @default(FIJO_MENSUAL)
+  sueldoMensual    Decimal?         @db.Decimal(10, 2)
+  tarifaHora       Decimal?         @db.Decimal(10, 2)
+  montoTurno       Decimal?         @db.Decimal(10, 2)
+  deletedAt        DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  roles            UsuarioRol[]
+  turnos           Turno[]
 }
 
 model Rol {
@@ -419,4 +431,19 @@ model Presupuesto {
 
   @@unique([localId, categoriaId, anio, mes])
   @@index([localId, anio, mes])
+}
+
+// Turno planificado de un miembro del staff (Fase C).
+model Turno {
+  id         String   @id @default(cuid())
+  usuarioId  String
+  fecha      DateTime @db.Date
+  horaInicio String
+  horaFin    String
+  nota       String?
+  createdAt  DateTime @default(now())
+  usuario    Usuario  @relation(fields: [usuarioId], references: [id])
+
+  @@index([usuarioId])
+  @@index([fecha])
 }

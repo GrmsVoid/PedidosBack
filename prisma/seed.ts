@@ -1,4 +1,4 @@
-import { PrismaClient, RolCodigo, MesaEstado } from "@prisma/client";
+import { PrismaClient, RolCodigo, MesaEstado, TipoRemuneracion } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { firmarTokenMesa } from "@/lib/qr";
 
@@ -53,6 +53,36 @@ async function main() {
     update: {},
     create: { usuarioId: admin.id, rolId: rolAdmin.id },
   });
+
+  // Personal demo (Fase C): un mozo, un barista y un cajero con distintas remuneraciones.
+  const staffDemo = [
+    { email: "mozo@cafe.demo", nombre: "María Mozo", rol: RolCodigo.MOZO, tipo: TipoRemuneracion.POR_TURNO, sueldoMensual: null, tarifaHora: null, montoTurno: "45.00" },
+    { email: "barista@cafe.demo", nombre: "Bruno Barista", rol: RolCodigo.BARISTA, tipo: TipoRemuneracion.POR_HORA, sueldoMensual: null, tarifaHora: "8.00", montoTurno: null },
+    { email: "cajero@cafe.demo", nombre: "Carla Caja", rol: RolCodigo.CAJERO, tipo: TipoRemuneracion.FIJO_MENSUAL, sueldoMensual: "1200.00", tarifaHora: null, montoTurno: null },
+  ];
+  const secretDemo = await bcrypt.hash("demo123", 10);
+  for (const s of staffDemo) {
+    const usuario = await prisma.usuario.upsert({
+      where: { email: s.email },
+      update: {},
+      create: {
+        email: s.email,
+        nombre: s.nombre,
+        passwordHash: secretDemo,
+        activo: true,
+        tipoRemuneracion: s.tipo,
+        sueldoMensual: s.sueldoMensual,
+        tarifaHora: s.tarifaHora,
+        montoTurno: s.montoTurno,
+      },
+    });
+    const rol = await prisma.rol.findUniqueOrThrow({ where: { codigo: s.rol } });
+    await prisma.usuarioRol.upsert({
+      where: { usuarioId_rolId: { usuarioId: usuario.id, rolId: rol.id } },
+      update: {},
+      create: { usuarioId: usuario.id, rolId: rol.id },
+    });
+  }
 
   // 10 mesas con QR token JWT firmado real (id estable demo-mesa-N)
   for (let i = 1; i <= 10; i++) {
