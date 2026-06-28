@@ -22,7 +22,15 @@ export const pedidoRepo = {
         estado: { in: ["CONFIRMADO", "EN_PREPARACION"] },
         items: { some: { estacionIdCongelada: estacionId } },
       },
-      include: { items: { include: { producto: true, modificadores: true } } },
+      include: {
+        items: {
+          include: {
+            producto: true,
+            modificadores: true,
+            combo: { include: { items: { include: { producto: true } } } },
+          },
+        },
+      },
       orderBy: { confirmadoEn: "asc" },
     });
   },

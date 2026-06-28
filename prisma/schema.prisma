@@ -287,13 +287,17 @@ model Pedido {
 model ItemPedido {
   id                      String            @id @default(cuid())
   pedidoId                String
-  productoId              String
+  productoId              String?
+  comboId                 String?
+  nombreCongelado         String?
   cantidad                Int
   precioUnitarioCongelado Decimal           @db.Decimal(10, 2)
+  prepTimeCongelado       Int               @default(0)
   notaLibre               String?
   estacionIdCongelada     String
   pedido                  Pedido            @relation(fields: [pedidoId], references: [id])
-  producto                Producto          @relation(fields: [productoId], references: [id])
+  producto                Producto?         @relation(fields: [productoId], references: [id])
+  combo                   Combo?            @relation(fields: [comboId], references: [id])
   modificadores           ItemModificador[]
 
   @@index([pedidoId])
@@ -506,6 +510,7 @@ model Combo {
   local       Local       @relation(fields: [localId], references: [id])
   estacion    Estacion    @relation(fields: [estacionId], references: [id])
   items       ComboItem[]
+  pedidoItems ItemPedido[]
 
   @@index([localId, disponible])
 }

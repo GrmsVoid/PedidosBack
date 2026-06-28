@@ -39,20 +39,23 @@ export const reportesService = {
     const filas = await prisma.itemPedido.groupBy({
       by: ["productoId"],
       where: {
+        productoId: { not: null },
         pedido: { estado: { not: "CANCELADO" }, confirmadoEn: { gte: desde, lte: hasta } },
       },
       _sum: { cantidad: true },
       orderBy: { _sum: { cantidad: "desc" } },
       take: limit,
     });
-    const ids = filas.map((f) => f.productoId);
+    const ids = filas.map((f) => f.productoId).filter((x): x is string => x !== null);
     const productos = await prisma.producto.findMany({ where: { id: { in: ids } } });
     const byId = new Map(productos.map((p) => [p.id, p]));
-    return filas.map((f) => ({
-      productoId: f.productoId,
-      nombre: byId.get(f.productoId)?.nombre ?? "?",
-      cantidadTotal: f._sum.cantidad ?? 0,
-    }));
+    return filas
+      .filter((f) => f.productoId !== null)
+      .map((f) => ({
+        productoId: f.productoId as string,
+        nombre: byId.get(f.productoId as string)?.nombre ?? "?",
+        cantidadTotal: f._sum.cantidad ?? 0,
+      }));
   },
 
   async horasPico(desde: Date, hasta: Date) {

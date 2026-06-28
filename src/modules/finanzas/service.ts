@@ -110,7 +110,10 @@ export const finanzasService = {
       origen: p.origen,
       mesas: p.sesion.mesas.map((m) => m.mesa.codigo),
       monto: toDbString(totalItems(p.items)),
-      items: p.items.map((it) => ({ nombre: it.producto.nombre, cantidad: it.cantidad })),
+      items: p.items.map((it) => ({
+        nombre: it.producto?.nombre ?? it.nombreCongelado ?? "—",
+        cantidad: it.cantidad,
+      })),
     }));
   },
 

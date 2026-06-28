@@ -28,16 +28,20 @@ export type ProductoSnapshot = {
 };
 
 export type ItemInput = {
-  productoId: string;
+  productoId?: string;
+  comboId?: string;
   cantidad: number;
   opcionesIds: string[];
   notaLibre: string | null;
 };
 
 export type ItemCalculado = {
-  productoId: string;
+  productoId: string | null;
+  comboId: string | null;
+  nombreCongelado: string | null;
   cantidad: number;
   precioUnitarioCongelado: string;
+  prepTimeCongelado: number;
   notaLibre: string | null;
   estacionIdCongelada: string;
   modificadores: Array<{
@@ -128,8 +132,11 @@ export function validarYCalcularItem(
 
   return {
     productoId: producto.id,
+    comboId: null,
+    nombreCongelado: null,
     cantidad: input.cantidad,
     precioUnitarioCongelado: toDbString(precioUnitario),
+    prepTimeCongelado: producto.prepTimeMinutes,
     notaLibre: input.notaLibre,
     estacionIdCongelada: producto.estacionId,
     modificadores,
