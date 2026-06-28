@@ -5,7 +5,7 @@ import {
   type ItemInput,
   type ProductoSnapshot,
 } from "@/modules/catalogo/service";
-import { catalogoRepo } from "@/modules/catalogo/repository";
+import { catalogoRepo, fechaHoyUTC } from "@/modules/catalogo/repository";
 import { pedidoRepo } from "./repository";
 import { puedeTransicionarPedido } from "./state";
 import { PedidoEstado, PedidoOrigen, type Prisma } from "@prisma/client";
@@ -31,10 +31,14 @@ export const pedidoService = {
           productoId: it.productoId,
         });
       }
+      // Precio del día (promo) vigente hoy, si existe.
+      const especial = await prisma.precioDia.findUnique({
+        where: { productoId_fecha: { productoId: it.productoId, fecha: fechaHoyUTC() } },
+      });
       productos.set(it.productoId, {
         id: p.id,
         nombre: p.nombre,
-        precioBase: p.precioBase.toString(),
+        precioBase: (especial?.precio ?? p.precioBase).toString(),
         disponible: p.disponible,
         estacionId: p.estacionId,
         prepTimeMinutes: p.prepTimeMinutes,

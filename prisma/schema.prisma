@@ -91,6 +91,8 @@ model Local {
   ingresosExtra     IngresoExtra[]
   presupuestos      Presupuesto[]
   planillas         PlanillaPeriodo[]
+  preciosDia        PrecioDia[]
+  combos            Combo[]
 }
 
 model Estacion {
@@ -100,6 +102,7 @@ model Estacion {
   activa    Boolean    @default(true)
   local     Local      @relation(fields: [localId], references: [id])
   productos Producto[]
+  combos    Combo[]
 
   @@index([localId, activa])
 }
@@ -157,6 +160,8 @@ model Producto {
   grupos          GrupoModificador[]
   items           ItemPedido[]
   historialPrecio ProductoPrecioHist[]
+  preciosDia      PrecioDia[]
+  comboItems      ComboItem[]
 
   @@index([categoriaId, disponible])
   @@index([estacionId])
@@ -468,6 +473,52 @@ model PlanillaLinea {
   periodo          PlanillaPeriodo  @relation(fields: [periodoId], references: [id], onDelete: Cascade)
 
   @@index([periodoId])
+}
+
+// Precio especial de un producto para una fecha (Fase E: menú del día / promo).
+model PrecioDia {
+  id         String   @id @default(cuid())
+  localId    String
+  productoId String
+  precio     Decimal  @db.Decimal(10, 2)
+  fecha      DateTime @db.Date
+  createdAt  DateTime @default(now())
+  local      Local    @relation(fields: [localId], references: [id])
+  producto   Producto @relation(fields: [productoId], references: [id])
+
+  @@unique([productoId, fecha])
+  @@index([localId, fecha])
+}
+
+// Combo: varios productos a precio fijo (Fase E).
+model Combo {
+  id          String      @id @default(cuid())
+  localId     String
+  estacionId  String
+  nombre      String
+  descripcion String?
+  precio      Decimal     @db.Decimal(10, 2)
+  disponible  Boolean     @default(true)
+  orden       Int         @default(0)
+  deletedAt   DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  local       Local       @relation(fields: [localId], references: [id])
+  estacion    Estacion    @relation(fields: [estacionId], references: [id])
+  items       ComboItem[]
+
+  @@index([localId, disponible])
+}
+
+model ComboItem {
+  id         String   @id @default(cuid())
+  comboId    String
+  productoId String
+  cantidad   Int      @default(1)
+  combo      Combo    @relation(fields: [comboId], references: [id], onDelete: Cascade)
+  producto   Producto @relation(fields: [productoId], references: [id])
+
+  @@index([comboId])
 }
 
 // Turno planificado de un miembro del staff (Fase C).

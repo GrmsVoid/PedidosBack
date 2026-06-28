@@ -15,6 +15,7 @@ export type MenuPayload = {
       descripcion: string | null;
       imagenUrl: string | null;
       precioBase: string;
+      precioAntes: string | null;
       prepTimeMinutes: number;
       disponible: boolean;
       orden: number;
@@ -32,5 +33,12 @@ export type MenuPayload = {
         }>;
       }>;
     }>;
+  }>;
+  combos: Array<{
+    id: string;
+    nombre: string;
+    descripcion: string | null;
+    precio: string;
+    items: Array<{ nombre: string; cantidad: number }>;
   }>;
 };

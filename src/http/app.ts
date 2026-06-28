@@ -10,6 +10,7 @@ import { adminRouter } from "./admin.routes";
 import { finanzasRouter } from "./finanzas.routes";
 import { personalRouter } from "./personal.routes";
 import { planillaRouter } from "./planilla.routes";
+import { menudiaRouter } from "./menudia.routes";
 
 export function createApp(): Express {
   const app = express();
@@ -37,6 +38,7 @@ export function createApp(): Express {
   app.use("/api", finanzasRouter);
   app.use("/api", personalRouter);
   app.use("/api", planillaRouter);
+  app.use("/api", menudiaRouter);
 
   return app;
 }
