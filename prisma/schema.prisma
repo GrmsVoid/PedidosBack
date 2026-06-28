@@ -67,6 +67,11 @@ enum TipoRemuneracion {
   POR_TURNO
 }
 
+enum PlanillaEstado {
+  BORRADOR
+  CERRADA
+}
+
 model Local {
   id             String       @id @default(cuid())
   nombre         String
@@ -85,6 +90,7 @@ model Local {
   categoriasIngreso CategoriaIngreso[]
   ingresosExtra     IngresoExtra[]
   presupuestos      Presupuesto[]
+  planillas         PlanillaPeriodo[]
 }
 
 model Estacion {
@@ -431,6 +437,37 @@ model Presupuesto {
 
   @@unique([localId, categoriaId, anio, mes])
   @@index([localId, anio, mes])
+}
+
+// Planilla mensual (Fase D): se calcula desde turnos + remuneración y al cerrar genera un Egreso.
+model PlanillaPeriodo {
+  id         String          @id @default(cuid())
+  localId    String
+  anio       Int
+  mes        Int
+  estado     PlanillaEstado  @default(CERRADA)
+  total      Decimal         @db.Decimal(10, 2)
+  egresoId   String?
+  generadoEn DateTime        @default(now())
+  local      Local           @relation(fields: [localId], references: [id])
+  lineas     PlanillaLinea[]
+
+  @@unique([localId, anio, mes])
+}
+
+model PlanillaLinea {
+  id               String           @id @default(cuid())
+  periodoId        String
+  usuarioId        String
+  nombre           String
+  tipoRemuneracion TipoRemuneracion
+  base             Decimal          @db.Decimal(10, 2)
+  turnos           Int              @default(0)
+  horas            Decimal          @default(0) @db.Decimal(10, 2)
+  monto            Decimal          @db.Decimal(10, 2)
+  periodo          PlanillaPeriodo  @relation(fields: [periodoId], references: [id], onDelete: Cascade)
+
+  @@index([periodoId])
 }
 
 // Turno planificado de un miembro del staff (Fase C).
