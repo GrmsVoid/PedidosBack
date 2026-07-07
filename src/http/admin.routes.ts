@@ -7,6 +7,7 @@ import { firmarTokenMesa } from "@/lib/qr";
 import { categoriaCreateSchema, categoriaUpdateSchema } from "@/lib/schemas/categoria";
 import { productoCreateSchema, productoUpdateSchema, grupoSchema } from "@/lib/schemas/producto";
 import { mesaCreateSchema, mesaUpdateSchema } from "@/lib/schemas/mesa";
+import { normalizarPlano, planoSchema, posicionesSchema } from "@/lib/schemas/plano";
 import { reportesService } from "@/modules/reportes/service";
 import { parseRango } from "@/lib/query-parser";
 import { AppError, ErrorCode } from "@/lib/errors";
@@ -206,6 +207,59 @@ adminRouter.put(
   }),
 );
 
+/* ---------- Plano del salón ---------- */
+// Lectura compartida con el mozo: necesita el mapa para atender por ubicación física.
+adminRouter.get(
+  "/admin/plano",
+  route(async (req) => {
+    await requireRole(req, ["ADMIN", "MOZO"]);
+    const local = await prisma.local.findUniqueOrThrow({
+      where: { id: DEMO_LOCAL_ID },
+      select: { planoJson: true },
+    });
+    const mesas = await prisma.mesa.findMany({
+      where: { localId: DEMO_LOCAL_ID, deletedAt: null },
+      select: { id: true, codigo: true, capacidad: true, estado: true, posicionX: true, posicionY: true, pisoId: true },
+      orderBy: { codigo: "asc" },
+    });
+    return { body: { plano: normalizarPlano(local.planoJson), mesas } };
+  }),
+);
+
+adminRouter.put(
+  "/admin/plano",
+  route(async (req) => {
+    await requireRole(req, ["ADMIN"]);
+    const plano = planoSchema.parse(req.body);
+    await prisma.local.update({
+      where: { id: DEMO_LOCAL_ID },
+      data: { planoJson: plano },
+    });
+    return { body: { plano } };
+  }),
+);
+
+adminRouter.put(
+  "/admin/plano/posiciones",
+  route(async (req) => {
+    await requireRole(req, ["ADMIN"]);
+    const { posiciones } = posicionesSchema.parse(req.body);
+    await prisma.$transaction(
+      posiciones.map((p) =>
+        prisma.mesa.update({
+          where: { id: p.id },
+          data: {
+            posicionX: p.posicionX,
+            posicionY: p.posicionY,
+            ...(p.pisoId !== undefined ? { pisoId: p.pisoId } : {}),
+          },
+        }),
+      ),
+    );
+    return { body: { ok: true, actualizadas: posiciones.length } };
+  }),
+);
+
 /* ---------- Mesas ---------- */
 adminRouter.get(
   "/admin/mesas",
@@ -308,6 +362,15 @@ adminRouter.get(
     await requireRole(req, ["ADMIN"]);
     const { desde, hasta } = parseRango(fullUrl(req));
     return { body: await reportesService.ventas(desde, hasta) };
+  }),
+);
+
+adminRouter.get(
+  "/admin/reportes/comprobantes",
+  route(async (req) => {
+    await requireRole(req, ["ADMIN"]);
+    const { desde, hasta } = parseRango(fullUrl(req));
+    return { body: await reportesService.comprobantes(desde, hasta) };
   }),
 );
 

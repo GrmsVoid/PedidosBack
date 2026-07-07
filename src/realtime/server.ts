@@ -1,6 +1,7 @@
 import { Server } from "socket.io";
 import type { Server as HttpServer } from "node:http";
 import type { ServerToClientEvents, RoomName } from "./events";
+import { allowedOrigins } from "@/http/app";
 import { logger } from "@/lib/logger";
 import { verificarSessionToken } from "@/lib/session-token";
 import { verifyStaffToken } from "@/lib/auth";
@@ -18,7 +19,7 @@ export function getIo(): Server<ClientToServer, ServerToClientEvents> {
 
 export function startSocketServer(httpServer: HttpServer) {
   io = new Server<ClientToServer, ServerToClientEvents>(httpServer, {
-    cors: { origin: "*", methods: ["GET", "POST"] },
+    cors: { origin: allowedOrigins(), methods: ["GET", "POST"] },
   });
 
   io.on("connection", (socket) => {

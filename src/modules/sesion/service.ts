@@ -79,6 +79,70 @@ export const sesionService = {
     });
   },
 
+  async separarMesa(_localId: string, mesaId: string) {
+    return prisma.$transaction(async (tx) => {
+      await mesaRepo.lockManyForUpdate(tx, [mesaId]);
+      const mesa = await tx.mesa.findUnique({ where: { id: mesaId } });
+      if (!mesa) throw new AppError(ErrorCode.NOT_FOUND, "Mesa no existe");
+      if (mesa.estado !== MesaEstado.UNIDA) {
+        throw new AppError(ErrorCode.INVALID_STATE_TRANSITION, "La mesa no está unida");
+      }
+
+      // Sesión ABIERTA que contiene esta mesa, con todas sus mesas.
+      const enlace = await tx.sesionMesaMesas.findFirst({
+        where: { mesaId, sesion: { estado: "ABIERTA" } },
+        include: { sesion: { include: { mesas: true } } },
+      });
+      // UNIDA sin sesión activa = estado inconsistente → liberar y salir.
+      if (!enlace) {
+        await tx.mesa.update({ where: { id: mesaId }, data: { estado: MesaEstado.LIBRE } });
+        await emitirMesasEstado(tx, [mesaId]);
+        return { ok: true, mesasRestantes: [] as string[] };
+      }
+
+      const sesion = enlace.sesion;
+      const companeras = sesion.mesas
+        .map((sm) => sm.mesaId)
+        .filter((id) => id !== mesaId);
+
+      // UNIDA pero sola en su sesión = inconsistencia → pasa a OCUPADA.
+      if (companeras.length === 0) {
+        await tx.mesa.update({ where: { id: mesaId }, data: { estado: MesaEstado.OCUPADA } });
+        await emitirMesasEstado(tx, [mesaId]);
+        return { ok: true, mesasRestantes: [mesaId] };
+      }
+
+      // Con pedidos hay consumo compartido: no se puede separar la cuenta.
+      const pedidos = await tx.pedido.count({ where: { sesionId: sesion.id } });
+      if (pedidos > 0) {
+        throw new AppError(
+          ErrorCode.INVALID_STATE_TRANSITION,
+          "Mesas con pedidos no pueden separarse; cierra la cuenta primero",
+        );
+      }
+
+      // Sacar la mesa de la sesión y liberarla.
+      await tx.sesionMesaMesas.delete({
+        where: { sesionId_mesaId: { sesionId: sesion.id, mesaId } },
+      });
+      await tx.mesa.update({ where: { id: mesaId }, data: { estado: MesaEstado.LIBRE } });
+
+      // Si queda una sola compañera, deja de estar "unida".
+      if (companeras.length === 1) {
+        await tx.mesa.update({
+          where: { id: companeras[0] },
+          data: { estado: MesaEstado.OCUPADA },
+        });
+      }
+
+      await tx.eventoSesion.create({
+        data: { sesionId: sesion.id, tipo: "MESA_SEPARADA", payloadJson: { mesaId } },
+      });
+      await emitirMesasEstado(tx, [mesaId, ...companeras]);
+      return { ok: true, mesasRestantes: companeras };
+    });
+  },
+
   async calcularTotal(sesionId: string): Promise<string> {
     const sesion = await prisma.sesionMesa.findUniqueOrThrow({
       where: { id: sesionId },
@@ -184,6 +248,18 @@ export const sesionService = {
           actorUsuarioId: cerradoPor,
         },
       });
+      try {
+        const { emit } = await import("@/realtime/emitter");
+        const mesaIds = sesion.mesas.map((sm) => sm.mesaId);
+        emit(["mozos", "caja", "admin"], "sesion:cerrada", { sesionId, mesaIds });
+        for (const mid of mesaIds) {
+          emit(`mesa:${mid}`, "sesion:cerrada", { sesionId, mesaIds });
+          emit(["mozos", "admin"], "mesa:estado", { mesaId: mid, estado: "LIBRE" });
+        }
+      } catch (e) {
+        const { logger } = await import("@/lib/logger");
+        logger.warn("Emit sesion:cerrada (sin pago) falló", { err: (e as Error).message });
+      }
       return { ok: true };
     });
   },

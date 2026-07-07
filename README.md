@@ -1,8 +1,9 @@
 # Sistema de Pedidos — Backend (API)
 
 API standalone del sistema de pedidos por QR para cafetería. Cubre todo el ciclo: el cliente
-escanea el QR de su mesa, arma su pedido, cocina/caja lo gestionan, y el dueño administra el
-negocio (catálogo, mesas, finanzas, presupuestos y personal).
+escanea el QR de su mesa (**reserva/hold de 5 min** y **pedido grupal** entre varios comensales),
+arma su pedido, cocina/caja lo gestionan, y el dueño administra el negocio (catálogo, mesas,
+finanzas, presupuestos, personal/planilla, menú del día y el detalle de ventas).
 
 Es el repo **backend** de un sistema de **dos repos** (este + `sistema-pedidos-frontend`).
 
@@ -20,19 +21,25 @@ Es el repo **backend** de un sistema de **dos repos** (este + `sistema-pedidos-f
 ### Modelo de datos (Prisma)
 
 - **Catálogo**: `Local`, `Estacion`, `Categoria`, `Producto`, `GrupoModificador`,
-  `OpcionModificador`, `ProductoPrecioHist`.
-- **Mesas y sesiones**: `Mesa` (con QR), `SesionMesa`, `SesionMesaMesas` (unir mesas),
+  `OpcionModificador`, `ProductoPrecioHist`, `PrecioDia` (promo por fecha), `Combo`, `ComboItem`.
+- **Mesas y sesiones**: `Mesa` (con QR), `SesionMesa` (con `holdExpiraEn`; estados
+  `ABIERTA/CERRADA/FUGADA/EXPIRADA`), `SesionMesaMesas` (unir mesas),
   `EventoSesion` (llamar mozo / pedir cuenta / auditoría), `Encuesta`.
-- **Pedidos y pagos**: `Pedido`, `ItemPedido`, `ItemModificador`, `Pago` (split bill).
+- **Grupo (pedido compartido)**: `Participante` (comensal que escaneó; anfitrión, activo,
+  aceptó) y `CarritoItem` (carrito del grupo antes de confirmar a cocina).
+- **Pedidos y pagos**: `Pedido`, `ItemPedido` (producto **o** combo congelado), `ItemModificador`,
+  `Pago` (split bill).
 - **Staff**: `Usuario` (con tipo de remuneración + sueldos + teléfono), `Rol`, `UsuarioRol`,
-  `Turno`.
+  `Turno`, `PlanillaPeriodo`, `PlanillaLinea`.
 - **Finanzas**: `CategoriaGasto`, `Egreso`, `CategoriaIngreso`, `IngresoExtra`, `Presupuesto`.
 - **Infra**: `IdempotencyKey` (Idempotency-Key para escrituras del cliente).
 
 ### Módulos de dominio (`src/modules`)
 
-`catalogo`, `mesa`, `sesion`, `pedido`, `pago`, `eventos`, `reportes`, `finanzas`.
-Realtime en `src/realtime` (server Socket.IO, emisores, cron de ETA).
+`catalogo`, `mesa`, `sesion`, `grupo`, `pedido`, `pago`, `eventos`, `reportes`, `finanzas`,
+`personal`, `planilla`, `menudia`.
+Realtime en `src/realtime` (server Socket.IO, emisores, cron de ETA, **hold-sweeper** que libera
+mesas con la reserva vencida).
 
 ### API REST (todo bajo `/api`)
 
@@ -40,29 +47,38 @@ Realtime en `src/realtime` (server Socket.IO, emisores, cron de ETA).
 | --- | --- | --- |
 | **Auth** | `POST /auth/login` → `{ token, user }` | público |
 | **Menú** | `GET /menu` (dinámico) | público |
-| **Cliente (sesión por QR)** | `POST /sesion/mesa/:mesaId` (abrir), `GET /sesion/actual`, `POST /pedidos`, `POST /sesion/llamar-mozo`, `POST /sesion/pedir-cuenta`, `POST /sesion/encuesta` | sessionToken / QR |
+| **Cliente (escaneo QR)** | `POST /sesion/mesa/:mesaId` → `NUEVO` (anfitrión + hold) u `OCUPADA` (pedir confirmación de grupo); `POST /sesion/mesa/:mesaId/unirme`; `GET /sesion/actual`, `POST /sesion/llamar-mozo`, `POST /sesion/pedir-cuenta`, `POST /sesion/encuesta` | sessionToken / QR |
+| **Grupo (carrito compartido)** | `GET /grupo/estado` (participantes, carrito con precios, contador), `POST /grupo/carrito`, `DELETE /grupo/carrito/:id`, `POST /grupo/aceptar`, `POST /grupo/salir`, `POST /grupo/anfitrion/quitar/:id`, `POST /grupo/anfitrion/forzar` | participanteToken |
 | **Mozo** | `GET /mozo/mesas`, `GET /mozo/sesiones`, unir/separar mesas, `evento/:id/atender`, `sesion/:id/pedido` (pedido manual), `pedido/:id/entregado`, `pedido/:id/cancelar` | MOZO/ADMIN |
 | **Cocina (KDS)** | `GET /kds/cola`, `pedido/:id/tomar`, `pedido/:id/listo`, `producto/:id/disponibilidad` | BARISTA/ADMIN |
 | **Caja** | `GET /caja/sesiones-por-cobrar`, `sesion/:id/cuenta`, `sesion/:id/pago`, `cerrar`, `cerrar-sin-pago` | CAJERO/ADMIN |
 | **Admin · catálogo** | CRUD `categorias`, CRUD `productos`, `productos/:id/modificadores` | ADMIN |
 | **Admin · mesas** | CRUD `mesas`, `mesas/:id/regenerar-qr`, `qr-signing-key/rotar` | ADMIN |
-| **Admin · reportes** | `reportes/ventas`, `top-productos`, `horas-pico`, `satisfaccion`, `auditoria` | ADMIN |
+| **Admin · menú del día** | `menu-dia` (promos por fecha), CRUD `combos` | ADMIN |
+| **Admin · reportes** | `reportes/ventas`, `reportes/comprobantes` (detalle venta por venta), `top-productos`, `horas-pico`, `satisfaccion`, `auditoria` | ADMIN |
 | **Admin · finanzas** | `finanzas/resumen`, `finanzas/cancelados`, CRUD `categorias-gasto`/`egresos`, CRUD `categorias-ingreso`/`ingresos`, `presupuestos` (GET/PUT/DELETE) | ADMIN |
-| **Admin · personal** | CRUD `usuarios` (roles, remuneración, activar/desactivar), CRUD `turnos` | ADMIN |
+| **Admin · personal** | CRUD `usuarios` (roles, remuneración, activar/desactivar), CRUD `turnos`, `planilla` (calcular/cerrar→egreso/reabrir) | ADMIN |
 
 ### Seguridad / roles
 
 - **Staff**: JWT Bearer (12 h). Roles: `MOZO`, `BARISTA`, `CAJERO`, `ADMIN`.
-- **Cliente**: token de **QR firmado** por mesa → abre sesión → `sessionToken`.
+- **Cliente**: token de **QR firmado** por mesa → abre sesión → `sessionToken` (acciones de
+  sesión) + `participanteToken` (acciones del grupo: carrito, aceptar, anfitrión).
 - Idempotency-Key en las escrituras del cliente; manejo central de errores → HTTP.
 
 ## Estado de funcionalidades
 
 - ✅ V1 completo: catálogo, mesas/QR, sesiones, pedidos, KDS, caja (split bill), eventos,
   encuesta, reportes, realtime.
-- ✅ **Panel del dueño** — Fase A (egresos/ingresos/ganancias + cancelados),
-  Fase B (presupuestos mensuales con alertas), Fase C (personal + turnos).
-- ⏳ Pendiente: Fase D (planilla → egreso automático), Fase E (menú del día / combos).
+- ✅ **Panel del dueño completo** — Fase A (egresos/ingresos/ganancias + cancelados),
+  Fase B (presupuestos con alertas), Fase C (personal + turnos), Fase D (planilla → egreso
+  automático), Fase E (menú del día: promos + combos). Más **Ventas/comprobantes** (detalle
+  venta por venta).
+- ✅ **Pedido grupal con hold**: reserva de mesa 5 min (se reinicia con actividad, se libera
+  sola), varios comensales en un carrito compartido y envío a cocina con aceptación de todos
+  (el anfitrión puede quitar inactivos o forzar). Verificado E2E.
+- ✅ **Fix unir/separar mesas**: separar cuenta las compañeras de la sesión activa; al quedar
+  una sola vuelve a `OCUPADA`.
 
 ## Desarrollo local
 

@@ -5,8 +5,8 @@ import { AppError, ErrorCode } from "./errors";
 
 function key(): Uint8Array {
   const secret = process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET;
-  if (!secret || secret.length < 16) {
-    throw new Error("AUTH_SECRET no configurado (mín. 16 caracteres)");
+  if (!secret || secret.length < 32) {
+    throw new Error("AUTH_SECRET no configurado (mín. 32 caracteres)");
   }
   return new TextEncoder().encode(secret);
 }

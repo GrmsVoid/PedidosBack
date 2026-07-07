@@ -3,11 +3,12 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { verifySecret, signStaffToken } from "@/lib/auth";
 import { AppError, ErrorCode } from "@/lib/errors";
+import { logger } from "@/lib/logger";
 import { route } from "./handler";
 
 const loginSchema = z.object({
-  email: z.string().email(),
-  secret: z.string().min(1),
+  email: z.string().trim().toLowerCase().email().max(254),
+  secret: z.string().min(1).max(128),
 });
 
 export const authRouter = Router();
@@ -22,6 +23,9 @@ authRouter.post(
     });
     const hash = user?.passwordHash ?? user?.pinHash ?? null;
     if (!user || !user.activo || user.deletedAt || !hash || !(await verifySecret(secret, hash))) {
+      // Auditoría: mismo mensaje para el cliente (no revela si el email existe),
+      // pero registro interno con IP para detectar fuerza bruta.
+      logger.warn("Login fallido", { email, ip: req.ip });
       throw new AppError(ErrorCode.SESSION_EXPIRED, "Credenciales inválidas");
     }
     const roles = user.roles.map((ur) => ur.rol.codigo);

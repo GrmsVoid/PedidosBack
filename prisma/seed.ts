@@ -5,10 +5,45 @@ import { firmarTokenMesa } from "@/lib/qr";
 const prisma = new PrismaClient();
 
 async function main() {
+  // Plano demo del salón (en centímetros): un piso de 12 m × 8 m con dos zonas.
+  // OJO: re-ejecutar el seed restablece este plano y las posiciones demo de las mesas.
+  const planoDemo = {
+    pisos: [
+      {
+        id: "piso-1",
+        nombre: "1er piso",
+        ancho: 1200,
+        alto: 800,
+        zonas: [
+          {
+            id: "zona-salon",
+            nombre: "Salón principal",
+            puntos: [
+              { x: 0, y: 0 },
+              { x: 880, y: 0 },
+              { x: 880, y: 800 },
+              { x: 0, y: 800 },
+            ],
+          },
+          {
+            id: "zona-terraza",
+            nombre: "Terraza",
+            puntos: [
+              { x: 880, y: 0 },
+              { x: 1200, y: 0 },
+              { x: 1200, y: 800 },
+              { x: 880, y: 800 },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
   // Local
   const local = await prisma.local.upsert({
     where: { id: "demo-local" },
-    update: {},
+    update: { planoJson: planoDemo },
     create: {
       id: "demo-local",
       nombre: "Café Demo",
@@ -16,6 +51,7 @@ async function main() {
       direccion: "Av. Demo 123",
       timezone: "America/Lima",
       qrSigningKeyId: "v1",
+      planoJson: planoDemo,
     },
   });
 
@@ -84,7 +120,9 @@ async function main() {
     });
   }
 
-  // 10 mesas con QR token JWT firmado real (id estable demo-mesa-N)
+  // 10 mesas con QR token JWT firmado real (id estable demo-mesa-N).
+  // Posición = centro de la mesa dentro del plano, en cm: M01–M08 en el salón (2 filas × 4),
+  // M09–M10 (6 personas) en la terraza.
   for (let i = 1; i <= 10; i++) {
     const mesaId = `demo-mesa-${i}`;
     const qrToken = await firmarTokenMesa({
@@ -92,16 +130,20 @@ async function main() {
       localId: local.id,
       keyId: local.qrSigningKeyId,
     });
+    const enTerraza = i > 8;
+    const posicionX = enTerraza ? 1040 : 140 + ((i - 1) % 4) * 210;
+    const posicionY = enTerraza ? 200 + (i - 9) * 350 : 220 + Math.floor((i - 1) / 4) * 330;
     await prisma.mesa.upsert({
       where: { id: mesaId },
-      update: { qrToken },
+      update: { qrToken, posicionX, posicionY, pisoId: "piso-1" },
       create: {
         id: mesaId,
         localId: local.id,
         codigo: `M${i.toString().padStart(2, "0")}`,
         capacidad: i <= 8 ? 4 : 6,
-        posicionX: (i - 1) % 5,
-        posicionY: Math.floor((i - 1) / 5),
+        posicionX,
+        posicionY,
+        pisoId: "piso-1",
         estado: MesaEstado.LIBRE,
         qrToken,
       },

@@ -14,7 +14,7 @@ export const kdsRouter = Router();
 kdsRouter.get(
   "/kds/cola",
   route(async (req) => {
-    await requireRole(req, ["BARISTA", "ADMIN"]);
+    await requireRole(req, ["BARISTA"]);
     const estacionId = (req.query.estacionId as string) ?? DEMO_ESTACION_ID;
     const pedidos = await pedidoRepo.colaPorEstacion(estacionId);
     const conEta = await Promise.all(
@@ -27,7 +27,7 @@ kdsRouter.get(
 kdsRouter.patch(
   "/kds/pedido/:id/tomar",
   route(async (req) => {
-    await requireRole(req, ["BARISTA", "ADMIN"]);
+    await requireRole(req, ["BARISTA"]);
     return { body: await pedidoService.transicionar(req.params.id, "EN_PREPARACION") };
   }),
 );
@@ -35,7 +35,7 @@ kdsRouter.patch(
 kdsRouter.patch(
   "/kds/pedido/:id/listo",
   route(async (req) => {
-    await requireRole(req, ["BARISTA", "ADMIN"]);
+    await requireRole(req, ["BARISTA"]);
     return { body: await pedidoService.transicionar(req.params.id, "LISTO") };
   }),
 );
@@ -43,7 +43,7 @@ kdsRouter.patch(
 kdsRouter.patch(
   "/kds/producto/:id/disponibilidad",
   route(async (req) => {
-    await requireRole(req, ["BARISTA", "ADMIN"]);
+    await requireRole(req, ["BARISTA"]);
     const { disponible } = dispoSchema.parse(req.body);
     await catalogoRepo.setDisponibilidad(req.params.id, disponible);
     return { body: { ok: true, productoId: req.params.id, disponible } };

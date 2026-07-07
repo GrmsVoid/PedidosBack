@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { dinero, dividir, sumar, toDbString } from "@/lib/dinero";
+import { dinero, dividir, multiplicar, sumar, toDbString } from "@/lib/dinero";
 
 export function agruparPorHora(pedidos: Array<{ confirmadoEn: Date }>): Record<number, number> {
   const map: Record<number, number> = {};
@@ -33,6 +33,78 @@ export const reportesService = {
       total: toDbString(total),
       ticketPromedio: calcularTicketPromedio(totales),
     };
+  },
+
+  /**
+   * Detalle venta por venta (comprobantes): cada sesión cerrada con sus pedidos,
+   * ítems congelados, modificadores, pagos y calificación. Es el "libro de ventas".
+   */
+  async comprobantes(desde: Date, hasta: Date) {
+    const sesiones = await prisma.sesionMesa.findMany({
+      where: { estado: { in: ["CERRADA", "FUGADA"] }, cerradaEn: { gte: desde, lte: hasta } },
+      orderBy: { cerradaEn: "desc" },
+      include: {
+        mesas: { include: { mesa: true } },
+        pagos: { orderBy: { registradoEn: "asc" } },
+        encuesta: true,
+        pedidos: {
+          orderBy: { numeroSesion: "asc" },
+          include: { items: { include: { producto: true, modificadores: true } } },
+        },
+      },
+    });
+
+    return sesiones.map((s) => {
+      const cobrado = s.pagos.reduce(
+        (acc, p) => sumar(acc, dinero(p.monto.toString())),
+        dinero("0"),
+      );
+      let consumo = dinero("0");
+      let itemsCount = 0;
+      const pedidos = s.pedidos.map((p) => {
+        const items = p.items.map((it) => {
+          const subtotal = multiplicar(dinero(it.precioUnitarioCongelado.toString()), it.cantidad);
+          if (p.estado !== "CANCELADO") {
+            consumo = sumar(consumo, subtotal);
+            itemsCount += it.cantidad;
+          }
+          return {
+            cantidad: it.cantidad,
+            nombre: it.producto?.nombre ?? it.nombreCongelado ?? "Ítem",
+            esCombo: Boolean(it.comboId),
+            precioUnitario: it.precioUnitarioCongelado.toString(),
+            subtotal: toDbString(subtotal),
+            modificadores: it.modificadores.map((m) => m.nombreCongelado),
+            nota: it.notaLibre,
+          };
+        });
+        return {
+          numeroSesion: p.numeroSesion,
+          origen: p.origen,
+          estado: p.estado,
+          confirmadoEn: p.confirmadoEn,
+          items,
+        };
+      });
+
+      return {
+        sesionId: s.id,
+        mesas: s.mesas.map((m) => m.mesa.codigo),
+        cerradaEn: s.cerradaEn,
+        estadoSesion: s.estado,
+        itemsCount,
+        consumo: toDbString(consumo),
+        total: toDbString(cobrado),
+        sinPago: s.pagos.length === 0,
+        pagos: s.pagos.map((p) => ({
+          metodo: p.metodo,
+          monto: p.monto.toString(),
+          comensalNum: p.comensalNum,
+        })),
+        estrellas: s.encuesta?.estrellas ?? null,
+        pedidos,
+      };
+    });
   },
 
   async topProductos(desde: Date, hasta: Date, limit: number) {

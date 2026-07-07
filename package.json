@@ -25,6 +25,8 @@
     "decimal.js": "^10.4.3",
     "dotenv": "^17.4.2",
     "express": "^4.21.2",
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^8.2.0",
     "jose": "^5.9.6",
     "socket.io": "^4.8.0",
     "zod": "^3.23.8"

@@ -16,6 +16,8 @@ export type EventMap = {
   "pago:registrado": { sesionId: string; restante: string };
   "sesion:cerrada": { sesionId: string; mesaIds: string[] };
   "eta:recalculada": { pedidoId: string; etaSegundos: number };
+  "prepedido:nuevo": { prePedidoId: string; codigo: string; mesa: string; nombre: string };
+  "prepedido:resuelto": { prePedidoId: string; estado: string };
 };
 
 export type EventName = keyof EventMap;

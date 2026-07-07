@@ -12,7 +12,7 @@ export const cajaRouter = Router();
 cajaRouter.get(
   "/caja/sesiones-por-cobrar",
   route(async (req) => {
-    await requireRole(req, ["CAJERO", "ADMIN"]);
+    await requireRole(req, ["CAJERO"]);
     const data = await prisma.sesionMesa.findMany({
       where: {
         estado: "ABIERTA",
@@ -28,7 +28,7 @@ cajaRouter.get(
 cajaRouter.get(
   "/caja/sesion/:id/cuenta",
   route(async (req) => {
-    await requireRole(req, ["CAJERO", "MOZO", "ADMIN"]);
+    await requireRole(req, ["CAJERO", "MOZO"]);
     return { body: await pagoService.resumenCuenta(req.params.id) };
   }),
 );
@@ -40,7 +40,7 @@ cajaRouter.post(
       req.header("idempotency-key") ?? null,
       "POST /api/caja/sesion/:id/pago",
       async () => {
-        const { userId } = await requireRole(req, ["CAJERO", "ADMIN"]);
+        const { userId } = await requireRole(req, ["CAJERO"]);
         const body = pagoCreateSchema.parse(req.body);
         const pago = await pagoService.registrar({
           sesionId: req.params.id,
@@ -58,7 +58,7 @@ cajaRouter.post(
 cajaRouter.post(
   "/caja/sesion/:id/cerrar",
   route(async (req) => {
-    const { userId } = await requireRole(req, ["CAJERO", "ADMIN"]);
+    const { userId } = await requireRole(req, ["CAJERO"]);
     return { body: await sesionService.cerrar(req.params.id, userId) };
   }),
 );
@@ -66,7 +66,7 @@ cajaRouter.post(
 cajaRouter.post(
   "/caja/sesion/:id/cerrar-sin-pago",
   route(async (req) => {
-    const { userId } = await requireRole(req, ["CAJERO", "MOZO", "ADMIN"]);
+    const { userId } = await requireRole(req, ["CAJERO", "MOZO"]);
     const { motivo } = cerrarSinPagoSchema.parse(req.body);
     return { body: await sesionService.cerrarSinPago(req.params.id, userId, motivo) };
   }),

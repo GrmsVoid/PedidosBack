@@ -17,6 +17,7 @@ enum SesionEstado {
   ABIERTA
   CERRADA
   FUGADA
+  EXPIRADA
 }
 
 enum PedidoEstado {
@@ -43,6 +44,14 @@ enum RolCodigo {
   BARISTA
   CAJERO
   ADMIN
+}
+
+/// Pedido hecho desde la web pública (sin QR): requiere aceptación del mozo.
+enum PrePedidoEstado {
+  PENDIENTE
+  ACEPTADO
+  RECHAZADO
+  EXPIRADO
 }
 
 enum EventoTipo {
@@ -79,6 +88,8 @@ model Local {
   direccion      String?
   timezone       String       @default("America/Lima")
   qrSigningKeyId String       @default("v1")
+  /// Plano del salón: { ancho, alto, zonas: [{ id, nombre, puntos: [{x,y}] }] } en centímetros.
+  planoJson      Json?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   mesas          Mesa[]
@@ -93,6 +104,7 @@ model Local {
   planillas         PlanillaPeriodo[]
   preciosDia        PrecioDia[]
   combos            Combo[]
+  pedidosRemotos    PedidoRemoto[]
 }
 
 model Estacion {
@@ -114,16 +126,43 @@ model Mesa {
   capacidad Int               @default(4)
   posicionX Int               @default(0)
   posicionY Int               @default(0)
+  /// Piso del plano al que pertenece (id dentro de Local.planoJson.pisos); null = primer piso.
+  pisoId    String?
   estado    MesaEstado        @default(LIBRE)
   qrToken   String            @unique
   deletedAt DateTime?
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
-  local     Local             @relation(fields: [localId], references: [id])
-  sesiones  SesionMesaMesas[]
+  local          Local             @relation(fields: [localId], references: [id])
+  sesiones       SesionMesaMesas[]
+  pedidosRemotos PedidoRemoto[]
 
   @@unique([localId, codigo])
   @@index([localId, estado])
+}
+
+/// Pre-pedido web: el cliente elige mesa en el plano público y arma su pedido;
+/// pasa a cocina solo cuando el mozo lo acepta (el cliente presenta su código).
+model PedidoRemoto {
+  id            String          @id @default(cuid())
+  localId       String
+  mesaId        String
+  codigo        String          @unique
+  nombreCliente String
+  telefono      String?
+  estado        PrePedidoEstado @default(PENDIENTE)
+  /// Snapshot de ítems para mostrar al mozo: [{productoId?, comboId?, cantidad,
+  /// opcionesIds, notaLibre, nombre, opcionesLabel, precioUnitario, subtotal}]
+  itemsJson     Json
+  total         Decimal         @db.Decimal(10, 2)
+  sesionId      String?
+  resueltoPor   String?
+  resueltoEn    DateTime?
+  creadoEn      DateTime        @default(now())
+  local         Local           @relation(fields: [localId], references: [id])
+  mesa          Mesa            @relation(fields: [mesaId], references: [id])
+
+  @@index([localId, estado, creadoEn])
 }
 
 model Categoria {
@@ -244,14 +283,51 @@ model SesionMesa {
   cerradaPor         String?
   estado             SesionEstado      @default(ABIERTA)
   encuestaSolicitada Boolean           @default(false)
+  holdExpiraEn       DateTime?
   local              Local             @relation(fields: [localId], references: [id])
   mesas              SesionMesaMesas[]
   pedidos            Pedido[]
   pagos              Pago[]
   eventos            EventoSesion[]
   encuesta           Encuesta?
+  participantes      Participante[]
+  carrito            CarritoItem[]
 
   @@index([localId, estado, abiertaEn])
+}
+
+/// Comensal que escaneó el QR y se sumó al grupo de la mesa.
+model Participante {
+  id          String        @id @default(cuid())
+  sesionId    String
+  nombre      String
+  esAnfitrion Boolean       @default(false)
+  activo      Boolean       @default(true)
+  acepto      Boolean       @default(false)
+  creadoEn    DateTime      @default(now())
+  vistoEn     DateTime      @default(now())
+  sesion      SesionMesa    @relation(fields: [sesionId], references: [id])
+  items       CarritoItem[]
+
+  @@index([sesionId])
+}
+
+/// Ítem del carrito compartido del grupo (aún no confirmado a cocina).
+model CarritoItem {
+  id             String       @id @default(cuid())
+  sesionId       String
+  participanteId String
+  productoId     String?
+  comboId        String?
+  cantidad       Int
+  opcionesIds    String[]
+  notaLibre      String?
+  creadoEn       DateTime     @default(now())
+  sesion         SesionMesa   @relation(fields: [sesionId], references: [id])
+  participante   Participante @relation(fields: [participanteId], references: [id])
+
+  @@index([sesionId])
+  @@index([participanteId])
 }
 
 model SesionMesaMesas {

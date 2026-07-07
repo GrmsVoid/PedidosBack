@@ -10,6 +10,8 @@ import {
   verificarSessionToken,
   type SessionTokenPayload,
 } from "@/lib/session-token";
+import { firmarParticipanteToken } from "@/lib/grupo-token";
+import { grupoService } from "@/modules/grupo/service";
 import { bearer } from "@/lib/authorize";
 import { pedidoCreateSchema } from "@/lib/schemas/pedido";
 import { encuestaSchema } from "@/lib/schemas/encuesta";
@@ -40,14 +42,66 @@ sesionRouter.post(
     if (payload.mesaId !== req.params.mesaId) {
       throw new AppError(ErrorCode.INVALID_QR_TOKEN, "Token no corresponde a la mesa");
     }
-    const sesion = await sesionService.abrirOAdjuntar(payload.localId, req.params.mesaId);
+    const r = await grupoService.escanear(payload.localId, req.params.mesaId);
+    // Mesa ya ocupada por otro grupo: el cliente debe confirmar que se suma.
+    if (r.estado === "OCUPADA") {
+      return {
+        body: {
+          estado: "OCUPADA",
+          sesionId: r.sesionId,
+          mesaCodigo: r.mesaCodigo,
+          grupoActivos: r.grupoActivos,
+          holdExpiraEn: r.holdExpiraEn,
+        },
+      };
+    }
+    // Mesa libre: se abre sesión y este comensal es el anfitrión.
     const cierreEstimadoIso = new Date(Date.now() + 1000 * 60 * 60 * 4).toISOString();
     const sessionToken = await firmarSessionToken({
-      sesionId: sesion.id,
-      mesaIds: [req.params.mesaId],
+      sesionId: r.sesionId,
+      mesaIds: r.mesaIds,
       cierreEstimadoIso,
     });
-    return { body: { sesionId: sesion.id, sessionToken, cierreEstimadoIso } };
+    const participanteToken = await firmarParticipanteToken({
+      sesionId: r.sesionId,
+      participanteId: r.participanteId,
+    });
+    return {
+      body: {
+        estado: "NUEVO",
+        sesionId: r.sesionId,
+        mesaCodigo: r.mesaCodigo,
+        sessionToken,
+        participanteToken,
+        esAnfitrion: true,
+        holdExpiraEn: r.holdExpiraEn,
+      },
+    };
+  }),
+);
+
+sesionRouter.post(
+  "/sesion/mesa/:mesaId/unirme",
+  route(async (req) => {
+    const { qrToken } = abrirSchema.parse(req.body);
+    const payload = await verificarTokenMesa(qrToken);
+    if (payload.mesaId !== req.params.mesaId) {
+      throw new AppError(ErrorCode.INVALID_QR_TOKEN, "Token no corresponde a la mesa");
+    }
+    const r = await grupoService.unirme(payload.localId, req.params.mesaId);
+    const cierreEstimadoIso = new Date(Date.now() + 1000 * 60 * 60 * 4).toISOString();
+    const sessionToken = await firmarSessionToken({
+      sesionId: r.sesionId,
+      mesaIds: r.mesaIds,
+      cierreEstimadoIso,
+    });
+    const participanteToken = await firmarParticipanteToken({
+      sesionId: r.sesionId,
+      participanteId: r.participanteId,
+    });
+    return {
+      body: { estado: "UNIDO", sesionId: r.sesionId, sessionToken, participanteToken, esAnfitrion: false },
+    };
   }),
 );
 
