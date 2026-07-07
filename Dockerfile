@@ -1,6 +1,9 @@
 # API Node standalone (Express + Socket.IO), ejecutada con tsx. Contexto de build: este repo.
-FROM node:20-alpine
-RUN corepack enable
+# Node 22: pnpm 11 requiere Node >= 22.13 (usa el builtin node:sqlite).
+FROM node:22-alpine
+# pnpm fijado a la versión que generó el lockfile (reproducible; evita que corepack
+# baje una "latest" que suba el piso de Node y rompa el build).
+RUN corepack enable && corepack prepare pnpm@11.1.3 --activate
 WORKDIR /app
 
 # Deps (capa cacheable). El schema se copia antes para que el postinstall de Prisma
