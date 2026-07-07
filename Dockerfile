@@ -24,4 +24,5 @@ RUN pnpm exec prisma generate
 ENV NODE_ENV=production
 EXPOSE 4000
 # En el arranque: aplica migraciones pendientes y levanta la API.
-CMD ["sh", "-c", "pnpm exec prisma migrate deploy && pnpm start"]
+# Los echo marcan cada fase para diagnosticar en los logs del host (Railway).
+CMD ["sh", "-c", "echo '[boot] aplicando migraciones...' && pnpm exec prisma migrate deploy && echo '[boot] migraciones OK; arrancando API...' && pnpm start"]
