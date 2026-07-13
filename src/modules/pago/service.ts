@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { dinero, dividir, sumar, toDbString } from "@/lib/dinero";
 import { sesionService } from "@/modules/sesion/service";
+import { sesionRepo } from "@/modules/sesion/repository";
+import { withTransaction } from "@/lib/tx";
 import { AppError, ErrorCode } from "@/lib/errors";
 import type { MetodoPago } from "@prisma/client";
 
@@ -28,7 +30,10 @@ export const pagoService = {
     cajeroId: string;
     comensalNum: number | null;
   }) {
-    return prisma.$transaction(async (tx) => {
+    return withTransaction(async ({ tx, emitAfter }) => {
+      // Serializa cobros concurrentes de la misma cuenta: sin este lock, dos
+      // cajas podrían leer el mismo "pagado" y ambas superar el restante.
+      await sesionRepo.lockForUpdate(tx, opts.sesionId);
       const sesion = await tx.sesionMesa.findUniqueOrThrow({
         where: { id: opts.sesionId },
         include: { pagos: true },
@@ -36,7 +41,8 @@ export const pagoService = {
       if (sesion.estado !== "ABIERTA") {
         throw new AppError(ErrorCode.INVALID_STATE_TRANSITION, "Sesión ya cerrada");
       }
-      const total = await sesionService.calcularTotal(opts.sesionId);
+      // Total y pagos se leen con `tx` (mismo snapshot que el lock).
+      const total = await sesionService.calcularTotal(opts.sesionId, tx);
       const pagado = sesion.pagos.reduce(
         (acc, p) => sumar(acc, dinero(p.monto.toString())),
         dinero("0"),
@@ -57,16 +63,12 @@ export const pagoService = {
         },
       });
       const restante = toDbString(restanteActual.minus(dinero(opts.monto)));
-      try {
-        const { emit } = await import("@/realtime/emitter");
+      emitAfter((emit) =>
         emit(["caja", `sesion:${opts.sesionId}`], "pago:registrado", {
           sesionId: opts.sesionId,
           restante,
-        });
-      } catch (e) {
-        const { logger } = await import("@/lib/logger");
-        logger.warn("Emit pago:registrado falló", { err: (e as Error).message });
-      }
+        }),
+      );
       return pago;
     });
   },

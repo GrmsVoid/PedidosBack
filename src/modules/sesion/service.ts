@@ -1,31 +1,32 @@
 import { prisma } from "@/lib/prisma";
 import { sesionRepo } from "./repository";
 import { mesaRepo } from "@/modules/mesa/repository";
+import { withTransaction, type TxContext } from "@/lib/tx";
 import { AppError, ErrorCode } from "@/lib/errors";
 import { dinero, sumar, toDbString } from "@/lib/dinero";
 import { firmarSessionToken } from "@/lib/session-token";
 import { MesaEstado, type Prisma } from "@prisma/client";
 
-/** Emite mesa:estado para las mesas dadas (best-effort; Socket.IO puede no estar arriba). */
+/**
+ * Lee el estado final de las mesas dentro de la transacción y DIFIERE el
+ * mesa:estado hasta después del commit (best-effort; Socket.IO puede no estar
+ * arriba en tests). Así los clientes nunca ven un estado que luego se revierte.
+ */
 async function emitirMesasEstado(
   tx: Prisma.TransactionClient,
+  emitAfter: TxContext["emitAfter"],
   mesaIds: string[],
 ): Promise<void> {
-  try {
-    const { emit } = await import("@/realtime/emitter");
-    const mesasFinales = await tx.mesa.findMany({ where: { id: { in: mesaIds } } });
-    for (const m of mesasFinales) {
-      emit(["mozos", "admin"], "mesa:estado", { mesaId: m.id, estado: m.estado });
-    }
-  } catch (e) {
-    const { logger } = await import("@/lib/logger");
-    logger.warn("Emit mesa:estado falló", { err: (e as Error).message });
-  }
+  const mesasFinales = await tx.mesa.findMany({ where: { id: { in: mesaIds } } });
+  const estados = mesasFinales.map((m) => ({ mesaId: m.id, estado: m.estado }));
+  emitAfter((emit) => {
+    for (const e of estados) emit(["mozos", "admin"], "mesa:estado", e);
+  });
 }
 
 export const sesionService = {
   async abrirOAdjuntar(localId: string, mesaId: string) {
-    return prisma.$transaction(async (tx) => {
+    return withTransaction(async ({ tx, emitAfter }) => {
       await mesaRepo.lockManyForUpdate(tx, [mesaId]);
       const mesa = await tx.mesa.findUniqueOrThrow({ where: { id: mesaId } });
 
@@ -45,7 +46,7 @@ export const sesionService = {
 
       const sesion = await sesionRepo.crear(tx, localId, [mesaId]);
       await tx.mesa.update({ where: { id: mesaId }, data: { estado: MesaEstado.OCUPADA } });
-      await emitirMesasEstado(tx, sesion.mesas.map((sm) => sm.mesaId));
+      await emitirMesasEstado(tx, emitAfter, sesion.mesas.map((sm) => sm.mesaId));
       return sesion;
     });
   },
@@ -54,7 +55,7 @@ export const sesionService = {
     if (mesaIds.length < 2) {
       throw new AppError(ErrorCode.VALIDATION, "Unir requiere 2+ mesas");
     }
-    return prisma.$transaction(async (tx) => {
+    return withTransaction(async ({ tx, emitAfter }) => {
       await mesaRepo.lockManyForUpdate(tx, mesaIds);
       const mesas = await tx.mesa.findMany({ where: { id: { in: mesaIds } } });
       if (mesas.length !== mesaIds.length) {
@@ -74,13 +75,13 @@ export const sesionService = {
       await tx.eventoSesion.create({
         data: { sesionId: sesion.id, tipo: "MESA_UNIDA", payloadJson: { mesaIds } },
       });
-      await emitirMesasEstado(tx, mesaIds);
+      await emitirMesasEstado(tx, emitAfter, mesaIds);
       return sesion;
     });
   },
 
   async separarMesa(_localId: string, mesaId: string) {
-    return prisma.$transaction(async (tx) => {
+    return withTransaction(async ({ tx, emitAfter }) => {
       await mesaRepo.lockManyForUpdate(tx, [mesaId]);
       const mesa = await tx.mesa.findUnique({ where: { id: mesaId } });
       if (!mesa) throw new AppError(ErrorCode.NOT_FOUND, "Mesa no existe");
@@ -96,7 +97,7 @@ export const sesionService = {
       // UNIDA sin sesión activa = estado inconsistente → liberar y salir.
       if (!enlace) {
         await tx.mesa.update({ where: { id: mesaId }, data: { estado: MesaEstado.LIBRE } });
-        await emitirMesasEstado(tx, [mesaId]);
+        await emitirMesasEstado(tx, emitAfter, [mesaId]);
         return { ok: true, mesasRestantes: [] as string[] };
       }
 
@@ -108,7 +109,7 @@ export const sesionService = {
       // UNIDA pero sola en su sesión = inconsistencia → pasa a OCUPADA.
       if (companeras.length === 0) {
         await tx.mesa.update({ where: { id: mesaId }, data: { estado: MesaEstado.OCUPADA } });
-        await emitirMesasEstado(tx, [mesaId]);
+        await emitirMesasEstado(tx, emitAfter, [mesaId]);
         return { ok: true, mesasRestantes: [mesaId] };
       }
 
@@ -138,13 +139,21 @@ export const sesionService = {
       await tx.eventoSesion.create({
         data: { sesionId: sesion.id, tipo: "MESA_SEPARADA", payloadJson: { mesaId } },
       });
-      await emitirMesasEstado(tx, [mesaId, ...companeras]);
+      await emitirMesasEstado(tx, emitAfter, [mesaId, ...companeras]);
       return { ok: true, mesasRestantes: companeras };
     });
   },
 
-  async calcularTotal(sesionId: string): Promise<string> {
-    const sesion = await prisma.sesionMesa.findUniqueOrThrow({
+  /**
+   * Suma el consumo no cancelado de la sesión. Acepta el cliente de una
+   * transacción (`tx`) para leer dentro del mismo snapshot cuando se combina
+   * con un lock de la cuenta (cobro/cierre); por defecto usa la conexión normal.
+   */
+  async calcularTotal(
+    sesionId: string,
+    client: Prisma.TransactionClient = prisma,
+  ): Promise<string> {
+    const sesion = await client.sesionMesa.findUniqueOrThrow({
       where: { id: sesionId },
       include: { pedidos: { include: { items: true } } },
     });
@@ -161,7 +170,10 @@ export const sesionService = {
   },
 
   async cerrar(sesionId: string, cerradoPor: string) {
-    return prisma.$transaction(async (tx) => {
+    return withTransaction(async ({ tx, emitAfter }) => {
+      // Lock de la cuenta: impide que entre un cobro entre el chequeo de
+      // completitud y el cierre (evita cerrar con un pago a medio registrar).
+      await sesionRepo.lockForUpdate(tx, sesionId);
       const sesion = await tx.sesionMesa.findUniqueOrThrow({
         where: { id: sesionId },
         include: { mesas: true, pedidos: true, pagos: true },
@@ -176,8 +188,8 @@ export const sesionService = {
         throw new AppError(ErrorCode.ORDERS_IN_PROGRESS, "Hay pedidos sin entregar");
       }
 
-      // Sumar pagos
-      const total = await this.calcularTotal(sesionId);
+      // Sumar pagos (total dentro del mismo snapshot del lock)
+      const total = await this.calcularTotal(sesionId, tx);
       const totalPagado = sesion.pagos.reduce(
         (acc, p) => sumar(acc, dinero(p.monto.toString())),
         dinero("0"),
@@ -208,23 +220,20 @@ export const sesionService = {
         cierreEstimadoIso: new Date(Date.now() + 10 * 60_000).toISOString(),
         tipo: "ENCUESTA_POST_CIERRE",
       });
-      try {
-        const { emit } = await import("@/realtime/emitter");
-        const mesaIds = sesion.mesas.map((sm) => sm.mesaId);
+      const mesaIds = sesion.mesas.map((sm) => sm.mesaId);
+      emitAfter((emit) => {
         emit(["mozos", "caja", "admin"], "sesion:cerrada", { sesionId, mesaIds });
         for (const mid of mesaIds) {
           emit(`mesa:${mid}`, "sesion:cerrada", { sesionId, mesaIds });
         }
-      } catch (e) {
-        const { logger } = await import("@/lib/logger");
-        logger.warn("Emit sesion:cerrada falló", { err: (e as Error).message });
-      }
+      });
       return { ok: true, tokenEncuesta };
     });
   },
 
   async cerrarSinPago(sesionId: string, cerradoPor: string, motivo: string) {
-    return prisma.$transaction(async (tx) => {
+    return withTransaction(async ({ tx, emitAfter }) => {
+      await sesionRepo.lockForUpdate(tx, sesionId);
       const sesion = await tx.sesionMesa.findUniqueOrThrow({
         where: { id: sesionId },
         include: { mesas: true },
@@ -248,18 +257,14 @@ export const sesionService = {
           actorUsuarioId: cerradoPor,
         },
       });
-      try {
-        const { emit } = await import("@/realtime/emitter");
-        const mesaIds = sesion.mesas.map((sm) => sm.mesaId);
+      const mesaIds = sesion.mesas.map((sm) => sm.mesaId);
+      emitAfter((emit) => {
         emit(["mozos", "caja", "admin"], "sesion:cerrada", { sesionId, mesaIds });
         for (const mid of mesaIds) {
           emit(`mesa:${mid}`, "sesion:cerrada", { sesionId, mesaIds });
           emit(["mozos", "admin"], "mesa:estado", { mesaId: mid, estado: "LIBRE" });
         }
-      } catch (e) {
-        const { logger } = await import("@/lib/logger");
-        logger.warn("Emit sesion:cerrada (sin pago) falló", { err: (e as Error).message });
-      }
+      });
       return { ok: true };
     });
   },

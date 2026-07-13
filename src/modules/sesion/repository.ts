@@ -26,6 +26,17 @@ export const sesionRepo = {
     });
   },
 
+  /**
+   * Bloquea la fila de la sesión (SELECT ... FOR UPDATE) para serializar
+   * operaciones concurrentes sobre su cuenta (p. ej. cobros simultáneos desde
+   * dos cajas). Devuelve [] si la sesión no existe.
+   */
+  async lockForUpdate(tx: Prisma.TransactionClient, sesionId: string) {
+    return tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM "SesionMesa" WHERE id = ${sesionId} FOR UPDATE
+    `;
+  },
+
   async crear(tx: Prisma.TransactionClient, localId: string, mesaIds: string[]) {
     return tx.sesionMesa.create({
       data: {

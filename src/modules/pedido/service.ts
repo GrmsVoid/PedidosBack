@@ -6,8 +6,9 @@ import {
   type ItemInput,
   type ProductoSnapshot,
 } from "@/modules/catalogo/service";
-import { catalogoRepo, fechaHoyUTC } from "@/modules/catalogo/repository";
+import { fechaHoyUTC } from "@/modules/catalogo/repository";
 import { dinero, multiplicar, toDbString } from "@/lib/dinero";
+import { conReintentoConflicto, withTransaction } from "@/lib/tx";
 import { pedidoRepo } from "./repository";
 import { puedeTransicionarPedido } from "./state";
 import { PedidoEstado, PedidoOrigen, type Prisma } from "@prisma/client";
@@ -26,16 +27,42 @@ export const pedidoService = {
     }
 
     const fecha = fechaHoyUTC();
+
+    // --- Prefetch en lote: una query por tipo en vez de N por item (evita N+1). ---
+    const productoIds = [
+      ...new Set(opts.items.filter((i) => !i.comboId && i.productoId).map((i) => i.productoId!)),
+    ];
+    const comboIds = [...new Set(opts.items.filter((i) => i.comboId).map((i) => i.comboId!))];
+
+    const [productos, preciosDia, combos] = await Promise.all([
+      productoIds.length
+        ? prisma.producto.findMany({
+            where: { id: { in: productoIds }, deletedAt: null },
+            include: { grupos: { include: { opciones: true } } },
+          })
+        : Promise.resolve([]),
+      productoIds.length
+        ? prisma.precioDia.findMany({ where: { productoId: { in: productoIds }, fecha } })
+        : Promise.resolve([]),
+      comboIds.length
+        ? prisma.combo.findMany({
+            where: { id: { in: comboIds }, localId: LOCAL_ID, deletedAt: null },
+            include: { items: { include: { producto: true } } },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const productoById = new Map(productos.map((p) => [p.id, p]));
+    const precioDiaById = new Map(preciosDia.map((pd) => [pd.productoId, pd.precio.toString()]));
+    const comboById = new Map(combos.map((c) => [c.id, c]));
+
     const calculados: ItemCalculado[] = [];
     const productosUsados = new Map<string, ProductoSnapshot>(); // para revalidar disponibilidad
     const combosUsados = new Set<string>();
 
     for (const it of opts.items) {
       if (it.comboId) {
-        const combo = await prisma.combo.findFirst({
-          where: { id: it.comboId, localId: LOCAL_ID, deletedAt: null },
-          include: { items: { include: { producto: true } } },
-        });
+        const combo = comboById.get(it.comboId);
         if (!combo) {
           throw new AppError(ErrorCode.NOT_FOUND, "Combo no existe", { comboId: it.comboId });
         }
@@ -65,18 +92,15 @@ export const pedidoService = {
       if (!productoId) throw new AppError(ErrorCode.VALIDATION, "Item sin producto ni combo");
       let snap = productosUsados.get(productoId);
       if (!snap) {
-        const p = await catalogoRepo.findProductoConModificadores(productoId);
+        const p = productoById.get(productoId);
         if (!p) {
           throw new AppError(ErrorCode.NOT_FOUND, "Producto no existe", { productoId });
         }
-        // Precio del día (promo) vigente hoy, si existe.
-        const especial = await prisma.precioDia.findUnique({
-          where: { productoId_fecha: { productoId, fecha } },
-        });
         snap = {
           id: p.id,
           nombre: p.nombre,
-          precioBase: (especial?.precio ?? p.precioBase).toString(),
+          // Precio del día (promo) vigente hoy, si existe.
+          precioBase: precioDiaById.get(productoId) ?? p.precioBase.toString(),
           disponible: p.disponible,
           estacionId: p.estacionId,
           prepTimeMinutes: p.prepTimeMinutes,
@@ -106,71 +130,86 @@ export const pedidoService = {
       );
     }
 
-    return prisma.$transaction(async (tx) => {
-      const sesion = await tx.sesionMesa.findUniqueOrThrow({ where: { id: opts.sesionId } });
-      if (sesion.estado !== "ABIERTA") {
-        throw new AppError(ErrorCode.INVALID_STATE_TRANSITION, "Sesión no abierta");
-      }
-      const numeroSesion = await pedidoRepo.siguienteNumero(opts.sesionId);
+    // Reintenta si dos pedidos concurrentes de la misma sesión chocan en el
+    // índice único (sesionId, numeroSesion): cada intento recalcula el número.
+    return conReintentoConflicto(
+      () =>
+        withTransaction(async ({ tx, emitAfter }) => {
+          const sesion = await tx.sesionMesa.findUniqueOrThrow({ where: { id: opts.sesionId } });
+          if (sesion.estado !== "ABIERTA") {
+            throw new AppError(ErrorCode.INVALID_STATE_TRANSITION, "Sesión no abierta");
+          }
+          const numeroSesion = await pedidoRepo.siguienteNumero(tx, opts.sesionId);
 
-      // Revalidar disponibilidad dentro de la transacción (race condition)
-      for (const [id, p] of productosUsados) {
-        const fresh = await tx.producto.findUniqueOrThrow({ where: { id } });
-        if (!fresh.disponible) {
-          throw new AppError(ErrorCode.PRODUCT_UNAVAILABLE, `Producto ${p.nombre} agotado`, {
-            productoId: id,
+          // Revalidar disponibilidad dentro de la transacción (race condition),
+          // en lote: una query detecta cualquier producto/combo agotado.
+          if (productosUsados.size > 0) {
+            const agotado = await tx.producto.findFirst({
+              where: { id: { in: [...productosUsados.keys()] }, disponible: false },
+              select: { id: true, nombre: true },
+            });
+            if (agotado) {
+              throw new AppError(ErrorCode.PRODUCT_UNAVAILABLE, `Producto ${agotado.nombre} agotado`, {
+                productoId: agotado.id,
+              });
+            }
+          }
+          if (combosUsados.size > 0) {
+            const frescos = await tx.combo.findMany({
+              where: { id: { in: [...combosUsados] } },
+              select: { id: true, disponible: true, deletedAt: true },
+            });
+            const frescoById = new Map(frescos.map((c) => [c.id, c]));
+            for (const id of combosUsados) {
+              const f = frescoById.get(id);
+              if (!f || f.deletedAt || !f.disponible) {
+                throw new AppError(ErrorCode.PRODUCT_UNAVAILABLE, "Combo no disponible", {
+                  comboId: id,
+                });
+              }
+            }
+          }
+
+          const pedido = await tx.pedido.create({
+            data: {
+              sesionId: opts.sesionId,
+              numeroSesion,
+              origen: opts.origen,
+              creadoPor: opts.creadoPor,
+              estado: PedidoEstado.CONFIRMADO,
+              items: {
+                create: calculados.map((c) => ({
+                  productoId: c.productoId,
+                  comboId: c.comboId,
+                  nombreCongelado: c.nombreCongelado,
+                  cantidad: c.cantidad,
+                  precioUnitarioCongelado: c.precioUnitarioCongelado,
+                  prepTimeCongelado: c.prepTimeCongelado,
+                  notaLibre: c.notaLibre,
+                  estacionIdCongelada: c.estacionIdCongelada,
+                  modificadores: { create: c.modificadores },
+                })),
+              },
+            },
+            include: { items: { include: { modificadores: true } } },
           });
-        }
-      }
-      for (const id of combosUsados) {
-        const fresh = await tx.combo.findUnique({ where: { id } });
-        if (!fresh || fresh.deletedAt || !fresh.disponible) {
-          throw new AppError(ErrorCode.PRODUCT_UNAVAILABLE, "Combo no disponible", { comboId: id });
-        }
-      }
 
-      const pedido = await tx.pedido.create({
-        data: {
-          sesionId: opts.sesionId,
-          numeroSesion,
-          origen: opts.origen,
-          creadoPor: opts.creadoPor,
-          estado: PedidoEstado.CONFIRMADO,
-          items: {
-            create: calculados.map((c) => ({
-              productoId: c.productoId,
-              comboId: c.comboId,
-              nombreCongelado: c.nombreCongelado,
-              cantidad: c.cantidad,
-              precioUnitarioCongelado: c.precioUnitarioCongelado,
-              prepTimeCongelado: c.prepTimeCongelado,
-              notaLibre: c.notaLibre,
-              estacionIdCongelada: c.estacionIdCongelada,
-              modificadores: { create: c.modificadores },
-            })),
-          },
-        },
-        include: { items: { include: { modificadores: true } } },
-      });
+          const etaSegundos = pedido.items.reduce(
+            (acc, it) => Math.max(acc, it.prepTimeCongelado * 60),
+            0,
+          );
+          emitAfter((emit) =>
+            emit(["kds", `sesion:${opts.sesionId}`], "pedido:creado", {
+              pedidoId: pedido.id,
+              sesionId: opts.sesionId,
+              etaSegundos,
+            }),
+          );
 
-      const etaSegundos = pedido.items.reduce(
-        (acc, it) => Math.max(acc, it.prepTimeCongelado * 60),
-        0,
-      );
-      try {
-        const { emit } = await import("@/realtime/emitter");
-        emit(["kds", `sesion:${opts.sesionId}`], "pedido:creado", {
-          pedidoId: pedido.id,
-          sesionId: opts.sesionId,
-          etaSegundos,
-        });
-      } catch (e) {
-        const { logger } = await import("@/lib/logger");
-        logger.warn("Emit pedido:creado falló", { err: (e as Error).message });
-      }
-
-      return pedido;
-    });
+          return pedido;
+        }),
+      { target: "numeroSesion" },
+    );
   },
 
   async transicionar(
@@ -178,7 +217,7 @@ export const pedidoService = {
     nuevo: PedidoEstado,
     opts?: { motivo?: string; actor?: string },
   ) {
-    return prisma.$transaction(async (tx) => {
+    return withTransaction(async ({ tx, emitAfter }) => {
       const p = await tx.pedido.findUniqueOrThrow({ where: { id: pedidoId } });
       if (!puedeTransicionarPedido(p.estado, nuevo)) {
         throw new AppError(
@@ -204,23 +243,21 @@ export const pedidoService = {
         });
       }
       const actualizado = await tx.pedido.update({ where: { id: pedidoId }, data });
-      try {
-        const { emit } = await import("@/realtime/emitter");
-        if (nuevo === "CANCELADO") {
+      if (nuevo === "CANCELADO") {
+        emitAfter((emit) =>
           emit([`sesion:${p.sesionId}`, "kds", "mozos"], "pedido:cancelado", {
             pedidoId,
             motivo: opts?.motivo ?? "Sin motivo",
-          });
-        } else {
+          }),
+        );
+      } else {
+        emitAfter((emit) =>
           emit([`sesion:${p.sesionId}`, "kds", "mozos"], "pedido:estado", {
             pedidoId,
             estado: nuevo,
             etaSegundos: 0,
-          });
-        }
-      } catch (e) {
-        const { logger } = await import("@/lib/logger");
-        logger.warn("Emit pedido:estado falló", { err: (e as Error).message });
+          }),
+        );
       }
       return actualizado;
     });

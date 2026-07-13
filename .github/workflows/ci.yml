@@ -24,6 +24,8 @@ jobs:
       - name: Prisma generate
         run: pnpm exec prisma generate
       - name: Type-check
+        run: pnpm typecheck
+      - name: Build bundle
         run: pnpm build
       # Integración/E2E usan Testcontainers (Docker disponible en ubuntu-latest).
       - name: Tests

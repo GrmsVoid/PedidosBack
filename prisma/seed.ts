@@ -269,6 +269,61 @@ async function main() {
     },
   });
 
+  // Más carta demo: que la demo se sienta como un local real, no como un mock vacío.
+  const salados = await prisma.categoria.upsert({
+    where: { id: "demo-cat-salados" },
+    update: {},
+    create: { id: "demo-cat-salados", localId: local.id, nombre: "Para comer", orden: 3 },
+  });
+  const masProductos: Array<{
+    id: string;
+    categoriaId: string;
+    nombre: string;
+    descripcion: string;
+    precioBase: string;
+    prepTimeMinutes: number;
+    orden: number;
+  }> = [
+    { id: "demo-prod-espresso", categoriaId: cafe.id, nombre: "Espresso", descripcion: "Doble shot, origen único", precioBase: "7.00", prepTimeMinutes: 2, orden: 1 },
+    { id: "demo-prod-latte", categoriaId: cafe.id, nombre: "Latte", descripcion: "Suave, con arte en la espuma", precioBase: "11.00", prepTimeMinutes: 4, orden: 2 },
+    { id: "demo-prod-coldbrew", categoriaId: cafe.id, nombre: "Cold Brew", descripcion: "Extracción en frío 18 h, con hielo", precioBase: "12.00", prepTimeMinutes: 2, orden: 3 },
+    { id: "demo-prod-chocolate", categoriaId: cafe.id, nombre: "Chocolate caliente", descripcion: "Cacao al 70 % con leche", precioBase: "10.00", prepTimeMinutes: 4, orden: 4 },
+    { id: "demo-prod-cheesecake", categoriaId: postres.id, nombre: "Cheesecake", descripcion: "De maracuyá, porción generosa", precioBase: "12.00", prepTimeMinutes: 2, orden: 1 },
+    { id: "demo-prod-galleta", categoriaId: postres.id, nombre: "Galleta de avena", descripcion: "Horneada en casa, con chispas", precioBase: "5.00", prepTimeMinutes: 1, orden: 2 },
+    { id: "demo-prod-toast", categoriaId: salados.id, nombre: "Toast de palta", descripcion: "Pan masa madre, palta y huevo pochado", precioBase: "16.00", prepTimeMinutes: 8, orden: 1 },
+    { id: "demo-prod-sandwich", categoriaId: salados.id, nombre: "Sándwich de pollo", descripcion: "Pollo deshilachado, pesto y queso", precioBase: "15.00", prepTimeMinutes: 9, orden: 2 },
+  ];
+  for (const p of masProductos) {
+    await prisma.producto.upsert({
+      where: { id: p.id },
+      update: {},
+      create: { ...p, estacionId: barra.id, disponible: true },
+    });
+  }
+
+  // Combo demo: desayuno (latte + toast) con precio menor que la suma.
+  const combo = await prisma.combo.upsert({
+    where: { id: "demo-combo-desayuno" },
+    update: {},
+    create: {
+      id: "demo-combo-desayuno",
+      localId: local.id,
+      estacionId: barra.id,
+      nombre: "Combo desayuno",
+      descripcion: "Latte 12oz + toast de palta",
+      precio: "24.00",
+      disponible: true,
+      orden: 1,
+    },
+  });
+  for (const [i, productoId] of ["demo-prod-latte", "demo-prod-toast"].entries()) {
+    await prisma.comboItem.upsert({
+      where: { id: `demo-comboitem-${i}` },
+      update: {},
+      create: { id: `demo-comboitem-${i}`, comboId: combo.id, productoId, cantidad: 1 },
+    });
+  }
+
   // Categorías de finanzas (Fase A): gastos e ingresos extra
   const catsGasto: Array<[string, string, number]> = [
     ["cg-insumos", "Insumos", 1],
@@ -300,7 +355,7 @@ async function main() {
   }
 
   const m1 = await prisma.mesa.findUniqueOrThrow({ where: { id: "demo-mesa-1" } });
-  console.warn("Seed completo. Local demo, 10 mesas, 2 productos.");
+  console.warn("Seed completo. Local demo, 10 mesas, 10 productos, 1 combo.");
   console.warn(`Demo cliente (mesa 1): http://localhost:3000/m/demo-mesa-1?t=${m1.qrToken}`);
   console.warn("Login staff: admin@cafe.demo / admin123");
 }

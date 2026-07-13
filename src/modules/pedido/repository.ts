@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@prisma/client";
 
 export const pedidoRepo = {
   findById(id: string) {
@@ -8,8 +9,17 @@ export const pedidoRepo = {
     });
   },
 
-  async siguienteNumero(sesionId: string): Promise<number> {
-    const max = await prisma.pedido.aggregate({
+  /**
+   * Siguiente número de pedido dentro de la sesión. Debe correr con el cliente
+   * de la transacción (`tx`) para leer el mismo snapshot en el que se insertará;
+   * aun así, ante concurrencia el índice único (sesionId, numeroSesion) puede
+   * rechazar la inserción → el llamador reintenta (ver conReintentoConflicto).
+   */
+  async siguienteNumero(
+    tx: Prisma.TransactionClient,
+    sesionId: string,
+  ): Promise<number> {
+    const max = await tx.pedido.aggregate({
       where: { sesionId },
       _max: { numeroSesion: true },
     });
